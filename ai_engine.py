@@ -7,7 +7,15 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# Try to get API key from environment or Streamlit secrets
 _groq_api_key = os.getenv("GROQ_API_KEY")
+if not _groq_api_key:
+    try:
+        import streamlit as st
+        _groq_api_key = st.secrets.get("GROQ_API_KEY")
+    except:
+        pass
+
 if _groq_api_key:
     client = Groq(api_key=_groq_api_key)
 else:

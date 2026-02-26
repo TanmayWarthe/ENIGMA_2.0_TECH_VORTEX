@@ -13,7 +13,15 @@ except ImportError:
 
 load_dotenv()
 
+# Try to get API key from environment or Streamlit secrets
 DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
+if not DEEPGRAM_API_KEY:
+    try:
+        import streamlit as st
+        DEEPGRAM_API_KEY = st.secrets.get("DEEPGRAM_API_KEY")
+    except:
+        pass
+
 DEEPGRAM_URL = "https://api.deepgram.com/v1/listen"
 
 
