@@ -6,10 +6,14 @@ import plotly.graph_objects as go
 import pandas as pd
 from dotenv import load_dotenv
 import database as db
+import auth_utils as auth
 
 load_dotenv()
 
 st.set_page_config(page_title="IntervueX – Dashboard", page_icon="📊", layout="wide")
+
+# Require authentication
+auth.require_auth()
 
 import sys
 import os

@@ -5,11 +5,15 @@ import json
 import plotly.graph_objects as go
 from dotenv import load_dotenv
 import database as db
+import auth_utils as auth
 from user_memory import get_memory_context_for_ai
 
 load_dotenv()
 
 st.set_page_config(page_title="IntervueX – Session History", page_icon="📜", layout="wide")
+
+# Require authentication
+auth.require_auth()
 
 import sys
 import os

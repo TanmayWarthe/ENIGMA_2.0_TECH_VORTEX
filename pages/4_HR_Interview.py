@@ -4,6 +4,7 @@ import streamlit as st
 import json
 from dotenv import load_dotenv
 import database as db
+import auth_utils as auth
 from ai_engine import generate_hr_questions, analyze_hr_response, generate_final_report
 from voice_handler import transcribe_audio, analyze_speech_patterns, synthesize_speech, get_browser_stt_component
 import streamlit.components.v1 as components
@@ -12,6 +13,9 @@ from webcam_proctor import inject_webcam_proctor
 from user_memory import extract_memories_from_conversation, extract_memories_with_ai, get_memory_context_for_ai
 
 load_dotenv()
+
+# Require authentication
+auth.require_auth()
 
 st.set_page_config(page_title="IntervueX – HR Interview", page_icon="🤝", layout="wide")
 

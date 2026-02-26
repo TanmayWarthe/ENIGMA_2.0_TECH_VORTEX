@@ -4,9 +4,13 @@ import streamlit as st
 import json
 from dotenv import load_dotenv
 import database as db
+import auth_utils as auth
 from resume_parser import parse_resume
 
 load_dotenv()
+
+# Require authentication
+auth.require_auth()
 
 st.set_page_config(page_title="IntervueX – Resume", page_icon="📄", layout="wide")
 

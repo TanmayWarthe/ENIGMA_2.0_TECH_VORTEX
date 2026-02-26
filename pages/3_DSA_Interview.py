@@ -5,6 +5,7 @@ import json
 from datetime import datetime
 from dotenv import load_dotenv
 import database as db
+import auth_utils as auth
 from ai_engine import (
     generate_dsa_question,
     analyze_candidate_response,
@@ -20,6 +21,9 @@ from user_memory import extract_memories_from_conversation, extract_memories_wit
 load_dotenv()
 
 st.set_page_config(page_title="IntervueX – DSA Interview", page_icon="💻", layout="wide")
+
+# Require authentication
+auth.require_auth()
 
 import sys
 import os

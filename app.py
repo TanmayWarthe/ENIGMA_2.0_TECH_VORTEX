@@ -3,6 +3,7 @@
 import streamlit as st
 from dotenv import load_dotenv
 import database as db
+import auth_utils as auth
 import os
 
 from ui_utils import apply_global_css
@@ -11,6 +12,9 @@ load_dotenv()
 
 # Initialize database
 db.init_db()
+
+# Initialize authentication
+auth.init_session_state()
 
 st.set_page_config(
     page_title="IntervueX – AI Interview Coach",
@@ -146,7 +150,7 @@ st.markdown("""
 
 # Session state initialization
 # Session state initialization
-if "user_id" not in st.session_state or st.session_state.user_id is None:
+if not auth.is_authenticated():
     st.markdown("<style>[data-testid='stSidebar'], [data-testid='collapsedControl'] { display: none !important; }</style>", unsafe_allow_html=True)
     
     if "auth_mode" not in st.session_state:
@@ -214,17 +218,14 @@ if "user_id" not in st.session_state or st.session_state.user_id is None:
                 password = st.text_input("Password", type="password", placeholder="••••••••")
                 
                 if st.button("Sign In", use_container_width=True, type="primary"):
-                    if email:
-                        user = db.get_user_by_email(email)
-                        if user:
-                            st.session_state.user_id = user["id"]
-                            st.session_state.user_name = user["name"]
-                            st.session_state.user_email = user["email"]
+                    if email and password:
+                        if auth.login(email, password):
+                            st.success("Login successful!")
                             st.rerun()
                         else:
-                            st.error("User not found.")
+                            st.error("Invalid email or password.")
                     else:
-                        st.error("Please enter email.")
+                        st.error("Please enter email and password.")
                 
                 st.markdown("<p style='text-align: center; font-size: 0.8rem; opacity: 0.6; margin: 1rem 0;'>NEW TO INTERVUEX?</p>", unsafe_allow_html=True)
                 if st.button("Create Free Account", use_container_width=True):
@@ -238,14 +239,20 @@ if "user_id" not in st.session_state or st.session_state.user_id is None:
                 name = st.text_input("Full Name", placeholder="John Doe")
                 email = st.text_input("Email Address", placeholder="you@example.com")
                 password = st.text_input("Password", type="password", placeholder="••••••••")
+                password_confirm = st.text_input("Confirm Password", type="password", placeholder="••••••••")
                 
                 if st.button("Create Free Account", use_container_width=True, type="primary"):
-                    if name and email:
-                        user_id = db.create_user(name, email)
-                        st.session_state.user_id = user_id
-                        st.session_state.user_name = name
-                        st.session_state.user_email = email
-                        st.rerun()
+                    if name and email and password and password_confirm:
+                        if password != password_confirm:
+                            st.error("Passwords do not match.")
+                        elif len(password) < 6:
+                            st.error("Password must be at least 6 characters.")
+                        elif auth.register(name, email, password):
+                            st.success("Account created! Please sign in.")
+                            st.session_state.auth_mode = "login"
+                            st.rerun()
+                        else:
+                            st.error("Email already registered.")
                     else:
                         st.error("Please fill all fields.")
                         
@@ -289,13 +296,11 @@ with st.sidebar:
 
     st.markdown("---")
     if st.button("🚪 Sign Out", use_container_width=True):
-        st.session_state.user_id = None
-        st.session_state.user_name = None
-        st.session_state.user_email = None
+        auth.logout()
         st.rerun()
 
 # Main content
-if st.session_state.user_id is not None:
+if auth.is_authenticated():
     # Dashboard for logged in users
     st.markdown('<p class="main-header" style="font-size: 30px">Welcome Back!</p>', unsafe_allow_html=True)
     st.markdown('<p class="sub-header">IntervueX is your ultimate AI-powered interview practice platform, offering real-time voice interactions, resume-based personalizations, and deep performance analytics.</p>', unsafe_allow_html=True)

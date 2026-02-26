@@ -3,7 +3,9 @@
 import sqlite3
 import json
 import os
-from datetime import datetime
+import hashlib
+import secrets
+from datetime import datetime, timedelta
 from typing import Optional
 
 DB_PATH = os.environ.get("DB_PATH", "interview_system.db")
@@ -22,12 +24,32 @@ def init_db():
     """Initialize all database tables."""
     conn = get_connection()
     cursor = conn.cursor()
+    
+    # First, check if we need to migrate existing users table
+    cursor.execute("PRAGMA table_info(users)")
+    columns = [row[1] for row in cursor.fetchall()]
+    
+    # If users table exists but doesn't have password_hash, we need to migrate
+    if columns and 'password_hash' not in columns:
+        print("Migrating users table to add authentication columns...")
+        cursor.executescript("""
+            ALTER TABLE users ADD COLUMN password_hash TEXT;
+            ALTER TABLE users ADD COLUMN salt TEXT;
+            ALTER TABLE users ADD COLUMN is_active INTEGER DEFAULT 1;
+            ALTER TABLE users ADD COLUMN last_login TIMESTAMP;
+        """)
+        conn.commit()
+        print("Migration complete!")
 
     cursor.executescript("""
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
             email TEXT UNIQUE NOT NULL,
+            password_hash TEXT,
+            salt TEXT,
+            is_active INTEGER DEFAULT 1,
+            last_login TIMESTAMP,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
 
@@ -133,20 +155,85 @@ def init_db():
             violation_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (session_id) REFERENCES interview_sessions(id)
         );
+
+        CREATE TABLE IF NOT EXISTS auth_tokens (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            token TEXT UNIQUE NOT NULL,
+            token_type TEXT DEFAULT 'session' CHECK(token_type IN ('session', 'refresh', 'api')),
+            expires_at TIMESTAMP NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            last_used TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            is_active INTEGER DEFAULT 1,
+            device_info TEXT,
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS activity_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            session_id INTEGER,
+            action TEXT NOT NULL,
+            action_type TEXT DEFAULT 'general' CHECK(action_type IN ('general', 'authentication', 'interview', 'resume', 'violation', 'system')),
+            details TEXT,
+            ip_address TEXT,
+            user_agent TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id),
+            FOREIGN KEY (session_id) REFERENCES interview_sessions(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_auth_tokens_user ON auth_tokens(user_id);
+        CREATE INDEX IF NOT EXISTS idx_auth_tokens_token ON auth_tokens(token);
+        CREATE INDEX IF NOT EXISTS idx_activity_logs_user ON activity_logs(user_id);
+        CREATE INDEX IF NOT EXISTS idx_activity_logs_session ON activity_logs(session_id);
+        CREATE INDEX IF NOT EXISTS idx_activity_logs_created ON activity_logs(created_at);
     """)
 
     conn.commit()
     conn.close()
 
 
+# ---- Utility Functions ----
+
+def hash_password(password: str, salt: str = None) -> tuple:
+    """Hash a password with salt. Returns (hash, salt)."""
+    if salt is None:
+        salt = secrets.token_hex(32)
+    pwd_hash = hashlib.pbkdf2_hmac('sha256', password.encode('utf-8'), 
+                                    salt.encode('utf-8'), 100000)
+    return pwd_hash.hex(), salt
+
+
+def verify_password(password: str, pwd_hash: str, salt: str) -> bool:
+    """Verify a password against its hash."""
+    new_hash, _ = hash_password(password, salt)
+    return new_hash == pwd_hash
+
+
+def generate_token() -> str:
+    """Generate a secure random token."""
+    return secrets.token_urlsafe(32)
+
+
 # ---- User Operations ----
 
-def create_user(name: str, email: str) -> int:
+def create_user(name: str, email: str, password: str = None) -> int:
     """Create a new user and return their ID."""
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("INSERT OR IGNORE INTO users (name, email) VALUES (?, ?)", (name, email))
+    
+    pwd_hash = None
+    salt = None
+    if password:
+        pwd_hash, salt = hash_password(password)
+    
+    cursor.execute("""
+        INSERT OR IGNORE INTO users (name, email, password_hash, salt) 
+        VALUES (?, ?, ?, ?)
+    """, (name, email, pwd_hash, salt))
     conn.commit()
+    
     if cursor.lastrowid == 0:
         cursor.execute("SELECT id FROM users WHERE email = ?", (email,))
         user_id = cursor.fetchone()["id"]
@@ -174,6 +261,177 @@ def get_user(user_id: int) -> Optional[dict]:
     row = cursor.fetchone()
     conn.close()
     return dict(row) if row else None
+
+
+# ---- Authentication Operations ----
+
+def authenticate_user(email: str, password: str) -> Optional[dict]:
+    """Authenticate a user with email and password. Returns user dict if successful."""
+    user = get_user_by_email(email)
+    if not user or not user.get('password_hash') or not user.get('salt'):
+        return None
+    
+    if verify_password(password, user['password_hash'], user['salt']):
+        # Update last login
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = ?
+        """, (user['id'],))
+        conn.commit()
+        conn.close()
+        return user
+    return None
+
+
+def create_auth_token(user_id: int, token_type: str = 'session', 
+                     expires_in_hours: int = 24, device_info: str = None) -> str:
+    """Create an authentication token for a user."""
+    token = generate_token()
+    expires_at = datetime.now() + timedelta(hours=expires_in_hours)
+    
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO auth_tokens (user_id, token, token_type, expires_at, device_info)
+        VALUES (?, ?, ?, ?, ?)
+    """, (user_id, token, token_type, expires_at, device_info))
+    conn.commit()
+    conn.close()
+    return token
+
+
+def verify_auth_token(token: str) -> Optional[dict]:
+    """Verify an auth token and return associated user if valid."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT t.*, u.* FROM auth_tokens t
+        JOIN users u ON t.user_id = u.id
+        WHERE t.token = ? AND t.is_active = 1 AND t.expires_at > CURRENT_TIMESTAMP
+    """, (token,))
+    row = cursor.fetchone()
+    
+    if row:
+        # Update last_used timestamp
+        cursor.execute("""
+            UPDATE auth_tokens SET last_used = CURRENT_TIMESTAMP WHERE token = ?
+        """, (token,))
+        conn.commit()
+    
+    conn.close()
+    return dict(row) if row else None
+
+
+def invalidate_auth_token(token: str):
+    """Invalidate/logout a specific token."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE auth_tokens SET is_active = 0 WHERE token = ?
+    """, (token,))
+    conn.commit()
+    conn.close()
+
+
+def invalidate_user_tokens(user_id: int, token_type: str = None):
+    """Invalidate all tokens for a user (logout all sessions)."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    if token_type:
+        cursor.execute("""
+            UPDATE auth_tokens SET is_active = 0 
+            WHERE user_id = ? AND token_type = ?
+        """, (user_id, token_type))
+    else:
+        cursor.execute("""
+            UPDATE auth_tokens SET is_active = 0 WHERE user_id = ?
+        """, (user_id,))
+    conn.commit()
+    conn.close()
+
+
+def get_user_active_tokens(user_id: int) -> list:
+    """Get all active tokens for a user."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT * FROM auth_tokens 
+        WHERE user_id = ? AND is_active = 1 AND expires_at > CURRENT_TIMESTAMP
+        ORDER BY created_at DESC
+    """, (user_id,))
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def update_user_password(user_id: int, new_password: str):
+    """Update a user's password."""
+    pwd_hash, salt = hash_password(new_password)
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE users SET password_hash = ?, salt = ? WHERE id = ?
+    """, (pwd_hash, salt, user_id))
+    conn.commit()
+    conn.close()
+
+
+# ---- Activity Log Operations ----
+
+def log_activity(user_id: int, action: str, action_type: str = 'general',
+                details: str = None, session_id: int = None, 
+                ip_address: str = None, user_agent: str = None) -> int:
+    """Log a user activity."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO activity_logs 
+        (user_id, session_id, action, action_type, details, ip_address, user_agent)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (user_id, session_id, action, action_type, details, ip_address, user_agent))
+    conn.commit()
+    log_id = cursor.lastrowid
+    conn.close()
+    return log_id
+
+
+def get_user_activity_logs(user_id: int, limit: int = 100, 
+                          action_type: str = None) -> list:
+    """Get activity logs for a user."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    if action_type:
+        cursor.execute("""
+            SELECT * FROM activity_logs 
+            WHERE user_id = ? AND action_type = ?
+            ORDER BY created_at DESC LIMIT ?
+        """, (user_id, action_type, limit))
+    else:
+        cursor.execute("""
+            SELECT * FROM activity_logs 
+            WHERE user_id = ?
+            ORDER BY created_at DESC LIMIT ?
+        """, (user_id, limit))
+    
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_session_activity_logs(session_id: int) -> list:
+    """Get all activity logs for a specific interview session."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT * FROM activity_logs 
+        WHERE session_id = ?
+        ORDER BY created_at ASC
+    """, (session_id,))
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
 
 
 # ---- Resume Operations ----
