@@ -465,3 +465,286 @@ Return ONLY valid JSON."""
             "interview_readiness": "needs_preparation",
             "recommendation": "Please try the interview again for a more accurate assessment."
         }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Voice AI DSA Agent
+# ─────────────────────────────────────────────────────────────────────────────
+
+_VOICE_AGENT_SYSTEM = """You are a senior technical interviewer conducting a live real-time DSA interview via voice.
+
+BEHAVIOR RULES:
+1. Start professionally and greet the candidate briefly.
+2. Ask ONE DSA problem clearly and concisely.
+3. After asking, wait for the candidate explanation. Do NOT immediately evaluate.
+4. Let the candidate explain; ask clarifying questions if unclear.
+5. Ask at least ONE follow-up that tests deeper understanding.
+6. Keep natural short sentences suitable for voice (2-4 sentences per turn).
+7. If answer is shallow, prompt: walk me through it step by step, what is the time complexity, can it be optimized?
+8. Challenge assumptions when necessary.
+9. Guide on errors instead of directly correcting.
+10. Simulate realistic pressure but stay professional and encouraging.
+Never output JSON during conversation — only during final evaluation.
+Never give away the answer directly.
+"""
+
+_VOICE_AGENT_EVAL_SYSTEM = """You are a strict DSA interview evaluator.
+The conversation below is a completed interview.
+Return ONLY the JSON below — no prose, no markdown fences.
+
+{
+  "question_asked": "string",
+  "follow_up_question": "string",
+  "scores": {
+    "problem_understanding": 0,
+    "logical_reasoning": 0,
+    "data_structure_selection": 0,
+    "algorithmic_efficiency": 0,
+    "optimization_awareness": 0,
+    "edge_case_handling": 0,
+    "communication_clarity": 0
+  },
+  "overall_score": 0.0,
+  "strengths": ["string"],
+  "areas_of_improvement": ["string"],
+  "optimization_suggestions": ["string"],
+  "final_feedback_summary": "string"
+}
+
+Score each dimension 0-10: 0-3 weak, 4-6 basic, 7-8 strong, 9-10 excellent.
+overall_score is the weighted average of all 7 scores.
+"""
+
+
+def voice_agent_respond(conversation_history: list, user_message: str,
+                        question_context: dict = None, skills: list = None) -> str:
+    """Generate the next conversational interviewer turn for the Voice DSA Agent."""
+    skill_hint = f"\nCandidate skills: {', '.join(skills)}" if skills else ""
+    q_hint = ""
+    if question_context:
+        q_hint = (
+            f"\nCurrent question: {question_context.get('title', '')} — "
+            f"{question_context.get('description', '')}\n"
+            f"Expected approach: {question_context.get('expected_approach', '')}\n"
+            f"Optimal complexity: {question_context.get('time_complexity', '')}"
+        )
+    messages = [{"role": "system", "content": _VOICE_AGENT_SYSTEM + skill_hint + q_hint}]
+    for turn in conversation_history[-20:]:
+        role = "assistant" if turn["role"] == "interviewer" else "user"
+        messages.append({"role": role, "content": turn["content"]})
+    messages.append({"role": "user", "content": user_message})
+    return _chat(messages, temperature=0.7, max_tokens=300)
+
+
+def voice_agent_final_evaluation(conversation_history: list) -> dict:
+    """Generate the final 7-dimension JSON evaluation for a Voice DSA Agent session."""
+    transcript = "\n".join(
+        [f"{t['role'].upper()}: {t['content']}" for t in conversation_history]
+    )
+    messages = [
+        {"role": "system", "content": _VOICE_AGENT_EVAL_SYSTEM},
+        {"role": "user", "content": f"Interview transcript:\n\n{transcript}\n\nGenerate evaluation JSON now."}
+    ]
+    result = _chat(messages, temperature=0.2, max_tokens=1500)
+    try:
+        if result.strip().startswith("```"):
+            result = result.split("\n", 1)[1].rsplit("```", 1)[0]
+        return json.loads(result)
+    except json.JSONDecodeError:
+        return {
+            "question_asked": "Unknown",
+            "follow_up_question": "N/A",
+            "scores": {
+                "problem_understanding": 5, "logical_reasoning": 5,
+                "data_structure_selection": 5, "algorithmic_efficiency": 5,
+                "optimization_awareness": 5, "edge_case_handling": 5,
+                "communication_clarity": 5,
+            },
+            "overall_score": 5.0,
+            "strengths": [],
+            "areas_of_improvement": [],
+            "optimization_suggestions": [],
+            "final_feedback_summary": "Could not parse evaluation. Please try again."
+        }
+
+
+# ---------------------------------------------------------------------------
+# Voice AI DSA Agent
+# ---------------------------------------------------------------------------
+
+_VOICE_AGENT_SYSTEM = (
+    "You are a senior technical interviewer conducting a live real-time DSA "
+    "interview via voice.\n\n"
+    "BEHAVIOR RULES:\n"
+    "1. Start professionally and greet the candidate briefly.\n"
+    "2. Ask ONE DSA problem clearly and concisely.\n"
+    "3. After asking, wait — do NOT immediately evaluate.\n"
+    "4. Let the candidate explain; ask clarifying questions if unclear.\n"
+    "5. Ask at least ONE follow-up testing deeper understanding.\n"
+    "6. Keep natural, short sentences (2-4 per turn) suitable for voice.\n"
+    "7. If shallow: 'Walk me through step-by-step?' / 'Time & space complexity?' "
+    "/ 'Can this be optimized?'\n"
+    "8. Challenge assumptions when necessary.\n"
+    "9. Guide on errors instead of correcting directly.\n"
+    "10. Simulate pressure but stay professional and encouraging.\n"
+    "NEVER output JSON during the conversation. NEVER give away the answer."
+)
+
+_VOICE_AGENT_EVAL_SYSTEM = (
+    "You are a strict DSA interview evaluator. "
+    "Return ONLY the following JSON — no prose, no markdown fences.\n\n"
+    '{"question_asked":"string","follow_up_question":"string",'
+    '"scores":{"problem_understanding":0,"logical_reasoning":0,'
+    '"data_structure_selection":0,"algorithmic_efficiency":0,'
+    '"optimization_awareness":0,"edge_case_handling":0,'
+    '"communication_clarity":0},"overall_score":0.0,'
+    '"strengths":["string"],"areas_of_improvement":["string"],'
+    '"optimization_suggestions":["string"],"final_feedback_summary":"string"}\n\n'
+    "Score each dimension 0-10: 0-3 weak | 4-6 basic | 7-8 strong | 9-10 excellent. "
+    "overall_score is the weighted average of all 7 scores."
+)
+
+
+def voice_agent_respond(conversation_history: list, user_message: str,
+                        question_context: dict = None, skills: list = None) -> str:
+    """Generate the next conversational interviewer turn for the Voice DSA Agent."""
+    skill_hint = ("\nCandidate skills: " + ", ".join(skills)) if skills else ""
+    q_hint = ""
+    if question_context:
+        q_hint = (
+            "\nCurrent question: "
+            + question_context.get("title", "") + " — "
+            + question_context.get("description", "") + "\n"
+            "Expected approach: " + question_context.get("expected_approach", "") + "\n"
+            "Optimal complexity: " + question_context.get("time_complexity", "")
+        )
+    messages = [{"role": "system", "content": _VOICE_AGENT_SYSTEM + skill_hint + q_hint}]
+    for turn in conversation_history[-20:]:
+        role = "assistant" if turn["role"] == "interviewer" else "user"
+        messages.append({"role": role, "content": turn["content"]})
+    messages.append({"role": "user", "content": user_message})
+    return _chat(messages, temperature=0.7, max_tokens=300)
+
+
+def voice_agent_final_evaluation(conversation_history: list) -> dict:
+    """Generate the final 7-dimension JSON evaluation for a Voice DSA Agent session."""
+    transcript = "\n".join(
+        t["role"].upper() + ": " + t["content"] for t in conversation_history
+    )
+    messages = [
+        {"role": "system", "content": _VOICE_AGENT_EVAL_SYSTEM},
+        {"role": "user", "content": "Interview transcript:\n\n" + transcript
+         + "\n\nGenerate evaluation JSON now."}
+    ]
+    result = _chat(messages, temperature=0.2, max_tokens=1500)
+    try:
+        if result.strip().startswith("```"):
+            result = result.split("\n", 1)[1].rsplit("```", 1)[0]
+        return json.loads(result)
+    except Exception:
+        return {
+            "question_asked": "Unknown",
+            "follow_up_question": "N/A",
+            "scores": {k: 5 for k in [
+                "problem_understanding", "logical_reasoning",
+                "data_structure_selection", "algorithmic_efficiency",
+                "optimization_awareness", "edge_case_handling",
+                "communication_clarity",
+            ]},
+            "overall_score": 5.0,
+            "strengths": [],
+            "areas_of_improvement": [],
+            "optimization_suggestions": [],
+            "final_feedback_summary": "Could not parse evaluation. Please try again.",
+        }
+
+
+# ---------------------------------------------------------------------------
+# Voice AI DSA Agent
+# ---------------------------------------------------------------------------
+
+_VOICE_AGENT_SYSTEM = (
+    "You are a senior technical interviewer conducting a live real-time DSA "
+    "interview via voice.\n\n"
+    "BEHAVIOR RULES:\n"
+    "1. Start professionally and greet the candidate briefly.\n"
+    "2. Ask ONE DSA problem clearly and concisely.\n"
+    "3. After asking, wait — do NOT immediately evaluate.\n"
+    "4. Let the candidate explain; ask clarifying questions if unclear.\n"
+    "5. Ask at least ONE follow-up testing deeper understanding.\n"
+    "6. Keep natural, short sentences (2-4 per turn) suitable for voice.\n"
+    "7. If shallow: 'Walk me through step-by-step?' / 'Time & space complexity?' "
+    "/ 'Can this be optimized?'\n"
+    "8. Challenge assumptions when necessary.\n"
+    "9. Guide on errors instead of correcting directly.\n"
+    "10. Simulate pressure but stay professional and encouraging.\n"
+    "NEVER output JSON during the conversation. NEVER give away the answer."
+)
+
+_VOICE_AGENT_EVAL_SYSTEM = (
+    "You are a strict DSA interview evaluator. "
+    "Return ONLY the following JSON — no prose, no markdown fences.\n\n"
+    '{"question_asked":"string","follow_up_question":"string",'
+    '"scores":{"problem_understanding":0,"logical_reasoning":0,'
+    '"data_structure_selection":0,"algorithmic_efficiency":0,'
+    '"optimization_awareness":0,"edge_case_handling":0,'
+    '"communication_clarity":0},"overall_score":0.0,'
+    '"strengths":["string"],"areas_of_improvement":["string"],'
+    '"optimization_suggestions":["string"],"final_feedback_summary":"string"}\n\n'
+    "Score each dimension 0-10: 0-3 weak | 4-6 basic | 7-8 strong | 9-10 excellent. "
+    "overall_score is the weighted average of all 7 scores."
+)
+
+
+def voice_agent_respond(conversation_history: list, user_message: str,
+                        question_context: dict = None, skills: list = None) -> str:
+    """Generate the next conversational interviewer turn for the Voice DSA Agent."""
+    skill_hint = ("\nCandidate skills: " + ", ".join(skills)) if skills else ""
+    q_hint = ""
+    if question_context:
+        q_hint = (
+            "\nCurrent question: "
+            + question_context.get("title", "") + " — "
+            + question_context.get("description", "") + "\n"
+            "Expected approach: " + question_context.get("expected_approach", "") + "\n"
+            "Optimal complexity: " + question_context.get("time_complexity", "")
+        )
+    messages = [{"role": "system", "content": _VOICE_AGENT_SYSTEM + skill_hint + q_hint}]
+    for turn in conversation_history[-20:]:
+        role = "assistant" if turn["role"] == "interviewer" else "user"
+        messages.append({"role": role, "content": turn["content"]})
+    messages.append({"role": "user", "content": user_message})
+    return _chat(messages, temperature=0.7, max_tokens=300)
+
+
+def voice_agent_final_evaluation(conversation_history: list) -> dict:
+    """Generate the final 7-dimension JSON evaluation for a Voice DSA Agent session."""
+    transcript = "\n".join(
+        t["role"].upper() + ": " + t["content"] for t in conversation_history
+    )
+    messages = [
+        {"role": "system", "content": _VOICE_AGENT_EVAL_SYSTEM},
+        {"role": "user", "content": "Interview transcript:\n\n" + transcript
+         + "\n\nGenerate evaluation JSON now."}
+    ]
+    result = _chat(messages, temperature=0.2, max_tokens=1500)
+    try:
+        if result.strip().startswith("```"):
+            result = result.split("\n", 1)[1].rsplit("```", 1)[0]
+        return json.loads(result)
+    except Exception:
+        return {
+            "question_asked": "Unknown",
+            "follow_up_question": "N/A",
+            "scores": {k: 5 for k in [
+                "problem_understanding", "logical_reasoning",
+                "data_structure_selection", "algorithmic_efficiency",
+                "optimization_awareness", "edge_case_handling",
+                "communication_clarity",
+            ]},
+            "overall_score": 5.0,
+            "strengths": [],
+            "areas_of_improvement": [],
+            "optimization_suggestions": [],
+            "final_feedback_summary": "Could not parse evaluation. Please try again.",
+        }

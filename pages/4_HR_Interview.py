@@ -152,6 +152,8 @@ if not st.session_state.hr_interview_active:
 
 else:
     session_id = st.session_state.hr_session_id
+    
+    # Inject browser lock and webcam proctoring
     inject_browser_lock(session_id)
     inject_webcam_proctor(session_id)
 
